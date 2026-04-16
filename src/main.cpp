@@ -137,6 +137,7 @@ delay(1000);
     TJpgDec.setSwapBytes(false);
 #else
     TJpgDec.setSwapBytes(true);
+#endif
    TJpgDec.setCallback(tft_output);
 
    // Initialize network and time

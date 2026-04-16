@@ -31,12 +31,12 @@
 // #define SPI_READ_FREQUENCY  20000000 // Optional reduced SPI frequency for reading TFT
 
 // Time Settings
-#define NTP_SERVER "pool.ntp.org"
-#define GMT_OFFSET_SEC 0
-#define UPDATE_INTERVAL_MS 10000 // 10 minutes
+#define NTP_SERVER "pool.ntp.org" // NTP server to use for time synchronization
+#define GMT_OFFSET_SEC 0          // set this to 0 and use the time as is, or if you are on the other side of the world, set this to the offset in seconds from GMT (e.g. for GMT+2, use 2*3600)
+#define UPDATE_INTERVAL_MS 10000  // 10 minutes
 
-#define SATTYPE GOES_EAST
-#define NROFIMAGESTOSHOW NROFIMAGES_ELEKTROL
+#define SATTYPE GOES_EAST                    // Choose which dataset to show, this will determine the number of images to show in the animation and the URL to fetch the images from
+#define NROFIMAGESTOSHOW NROFIMAGES_ELEKTROL // Depending on the chosen dataset, we can show an animation of every 20 minutes, for GOES or 30 minutes for ElektroL. The number of images to show for 24 hours is 72 for GOES and 48 for ElektroL. The EPIC has one image every hour, so we can show 24 images
 #define RESIZEURL RESIZEURL_GOES
 
 // GOES Image Settings
