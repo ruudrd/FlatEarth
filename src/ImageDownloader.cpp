@@ -1,10 +1,10 @@
 #include "ImageDownloader.h"
 #include "config.h"
 #include <TJpg_Decoder.h>
+#ifndef USE_ARDUINO_GFX
 #include <TFT_eSPI.h>
-
-// External reference to TFT display instance
 extern TFT_eSPI tft;
+#endif
 
 /**
  * Download or load from cache a GOES satellite image for a specific timestamp

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:nl.aliexpress.com)",
+      "WebFetch(domain:www.waveshare.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh search *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:community.platformio.org)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(platformio run *)",
+      "Bash(~/.platformio/penv/Scripts/platformio.exe run *)"
+    ]
+  }
+}

@@ -2,6 +2,7 @@
 #define IMAGE_DOWNLOADER_H
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <HTTPClient.h>
 #include <ImageCache.h>
 
