@@ -2,7 +2,7 @@
 #define IMAGE_CACHE_H
 
 #include <Arduino.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include "config.h"
 
 class ImageCache {

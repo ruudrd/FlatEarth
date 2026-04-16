@@ -10,29 +10,29 @@ ImageCache cache;
 
 /**
  * Initialize the cache system
- * @return true if SPIFFS mounted successfully, false otherwise
+ * @return true if LittleFS mounted successfully, false otherwise
  */
 bool ImageCache::begin() {
     if (DEBUG_ENABLED) Serial.println("Initializing cache system...");
     
-    // Format SPIFFS if mounting fails
-    if(!SPIFFS.begin(true)) {
-        if (DEBUG_ENABLED) Serial.println("SPIFFS mount failed, attempting format...");
-        if(!SPIFFS.format()) {
-            if (DEBUG_ENABLED) Serial.println("SPIFFS format failed");
+    // Format LittleFS if mounting fails
+    if(!LittleFS.begin(true)) {
+        if (DEBUG_ENABLED) Serial.println("LittleFS mount failed, attempting format...");
+        if(!LittleFS.format()) {
+            if (DEBUG_ENABLED) Serial.println("LittleFS format failed");
             return false;
         }
-        if(!SPIFFS.begin()) {
-            if (DEBUG_ENABLED) Serial.println("SPIFFS mount after format failed");
+        if(!LittleFS.begin()) {
+            if (DEBUG_ENABLED) Serial.println("LittleFS mount after format failed");
             return false;
         }
     }
 
-    // Print SPIFFS information
+    // Print LittleFS information
     if (DEBUG_ENABLED) {
-        Serial.printf("Total SPIFFS space: %d bytes\n", SPIFFS.totalBytes());
-        Serial.printf("Used SPIFFS space: %d bytes\n", SPIFFS.usedBytes());
-        Serial.printf("Free SPIFFS space: %d bytes\n", SPIFFS.totalBytes() - SPIFFS.usedBytes());
+        Serial.printf("Total LittleFS space: %d bytes\n", LittleFS.totalBytes());
+        Serial.printf("Used LittleFS space: %d bytes\n", LittleFS.usedBytes());
+        Serial.printf("Free LittleFS space: %d bytes\n", LittleFS.totalBytes() - LittleFS.usedBytes());
     }
 
     // Initialize cache entries
@@ -53,8 +53,8 @@ bool ImageCache::begin() {
  */
 String ImageCache::getCachePath(const String& timestamp) {
     // Ensure directory exists before each write
-    if (!SPIFFS.exists("/cache")) {
-        SPIFFS.mkdir("/cache");
+    if (!LittleFS.exists("/cache")) {
+        LittleFS.mkdir("/cache");
     }
     return "/cache/" + timestamp + ".jpg";
 }
@@ -66,9 +66,9 @@ String ImageCache::getCachePath(const String& timestamp) {
  */
 bool ImageCache::cacheImage(const String& timestamp) {
     //Check available space
-    if (SPIFFS.usedBytes() + imageSize > SPIFFS.totalBytes() * 0.9) { // Leave 10% free
+    if (LittleFS.usedBytes() + imageSize > LittleFS.totalBytes() * 0.9) { // Leave 10% free
         if (DEBUG_ENABLED) {
-            Serial.println("SPIFFS running low on space, cleaning old files...");
+            Serial.println("LittleFS running low on space, cleaning old files...");
         }
         cleanup();  // Remove old files
     }
@@ -79,7 +79,7 @@ bool ImageCache::cacheImage(const String& timestamp) {
     }
     
     String path = getCachePath(timestamp);
-    File file = SPIFFS.open(path, "w",true);
+    File file = LittleFS.open(path, "w",true);
     if (!file) {
         if (DEBUG_ENABLED) {
             Serial.print("Failed to open file for writing: ");
@@ -99,7 +99,7 @@ bool ImageCache::cacheImage(const String& timestamp) {
     }
     
     entries[writeIndex] = {timestamp, true};
-    writeIndex = (writeIndex + 1) % NROFIMAGESTOSHOW;
+    writeIndex = (writeIndex + 1) % CACHE_SIZE;
     
     if (DEBUG_ENABLED) {
         Serial.printf("Cached image %s (%d bytes)\n", timestamp.c_str(), written);
@@ -116,16 +116,21 @@ bool ImageCache::loadImage(const String &timestamp)
 {
     // Check if file exists in cache
     String path = getCachePath(timestamp);
-    if (!SPIFFS.exists(path))
+    if (!LittleFS.exists(path))
         return false;
 
     // Open cached file
-    File file = SPIFFS.open(path, "r");
+    File file = LittleFS.open(path, "r");
     if (!file)
         return false;
 
     // Allocate buffer for image data
     imageSize = file.size();
+    if (imageSize == 0) {
+        file.close();
+        LittleFS.remove(path);  // Remove corrupt empty file
+        return false;
+    }
     if (imageBuffer)
         free(imageBuffer);
     imageBuffer = (uint8_t *)malloc(imageSize);
@@ -144,54 +149,62 @@ bool ImageCache::loadImage(const String &timestamp)
 }
 
 /**
- * Remove all cached images from storage
- * Called when cache needs to be cleared
+ * Remove the oldest cached images from storage to free space
+ * Scans LittleFS directly so it works correctly across reboots
  */
 void ImageCache::cleanup() {
     if (DEBUG_ENABLED) {
         Serial.println("Starting cache cleanup...");
-        Serial.printf("Before cleanup - Used space: %d bytes\n", SPIFFS.usedBytes());
-    }
+        Serial.printf("Before cleanup - Used space: %d bytes\n", LittleFS.usedBytes());
 
-    // First list all files in SPIFFS for debugging
-    if (DEBUG_ENABLED) {
-        File root = SPIFFS.open("/");
-        File file = root.openNextFile();
-        while(file) {
-            Serial.printf("Found file: %s, size: %d\n", file.path(), file.size());
-        #ifdef DELETE_ALL
-            SPIFFS.remove(file.path());    // Remove all files from root
-        #endif
-            file = root.openNextFile();
+        File dir = LittleFS.open("/cache");
+        if (dir && dir.isDirectory()) {
+            File f = dir.openNextFile();
+            while (f) {
+                Serial.printf("Found file: %s, size: %d\n", f.path(), f.size());
+                f = dir.openNextFile();
+            }
+            dir.close();
         }
     }
 
-    // Remove files and invalidate entries
+    // Remove oldest files until LittleFS usage is below 50% (or no more files)
+    // Each pass scans for the lexicographically smallest (= chronologically oldest) file
     int filesRemoved = 0;
-    for (int i = 0; i < CACHE_SIZE; i++) {
-        if (!entries[i].valid) continue;
-        
-        String path = getCachePath(entries[i].timestamp);
-        if (SPIFFS.exists(path)) {
-            if (SPIFFS.remove(path)) {
-                filesRemoved++;
-                if (DEBUG_ENABLED) {
-                    Serial.printf("Removed file: %s\n", path.c_str());
-                }
-            } else {
-                if (DEBUG_ENABLED) {
-                    Serial.printf("Failed to remove file: %s\n", path.c_str());
+    size_t targetUsage = LittleFS.totalBytes() / 2;
+
+    while (LittleFS.usedBytes() > targetUsage) {
+        String oldestPath;
+        File dir = LittleFS.open("/cache");
+        if (!dir || !dir.isDirectory()) break;
+        File f = dir.openNextFile();
+        while (f) {
+            if (!f.isDirectory()) {
+                String fp = String(f.path());
+                if (oldestPath.isEmpty() || fp < oldestPath) {
+                    oldestPath = fp;
                 }
             }
+            f = dir.openNextFile();
         }
-        entries[i].valid = false;  // Mark entry as invalid
+        dir.close();
+
+        if (oldestPath.isEmpty()) break;
+
+        if (LittleFS.remove(oldestPath)) {
+            filesRemoved++;
+            if (DEBUG_ENABLED) Serial.printf("Removed: %s\n", oldestPath.c_str());
+        } else {
+            break;
+        }
     }
 
-    // Reset write index
+    // Invalidate in-memory entries
+    for (int i = 0; i < CACHE_SIZE; i++) entries[i].valid = false;
     writeIndex = 0;
 
     if (DEBUG_ENABLED) {
         Serial.printf("Cleanup complete - Removed %d files\n", filesRemoved);
-        Serial.printf("After cleanup - Used space: %d bytes\n", SPIFFS.usedBytes());
+        Serial.printf("After cleanup - Used space: %d bytes\n", LittleFS.usedBytes());
     }
 }

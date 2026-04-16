@@ -1,10 +1,6 @@
 #include "ImageDownloader.h"
 #include "config.h"
 #include <TJpg_Decoder.h>
-#ifndef USE_ARDUINO_GFX
-#include <TFT_eSPI.h>
-extern TFT_eSPI tft;
-#endif
 
 /**
  * Download or load from cache a GOES satellite image for a specific timestamp
@@ -22,8 +18,8 @@ bool ImageDownloader::downloadImage(String timestamp)
         return true;
     }
 
-    if (DEBUG_ENABLED)
-        Serial.println("Starting download...");
+    //  if (DEBUG_ENABLED)
+    //      Serial.println("Starting download...");
 
     HTTPClient http;
     bool downloadSuccess = false;
@@ -77,20 +73,33 @@ bool ImageDownloader::downloadImage(String timestamp)
 
     // Download image data in chunks
     WiFiClient *stream = http.getStreamPtr();
-    size_t read = 0;
-    while (read < imageSize)
+    size_t bytesRead = 0;
+    unsigned long lastProgress = millis();
+
+    while (bytesRead < imageSize)
     {
         size_t available = stream->available();
         if (available)
         {
-            read += stream->readBytes(imageBuffer + read, available);
+            bytesRead += stream->readBytes(imageBuffer + bytesRead, available);
+            lastProgress = millis();
+        }
+        else
+        {
+            if (millis() - lastProgress > 5000)
+            {
+                if (DEBUG_ENABLED)
+                    Serial.println("Download timeout");
+                break;
+            }
+            delay(1); // Yield to FreeRTOS — prevents WDT starvation
         }
     }
 
     http.end();
 
     // Cache the image if download was successful
-    if (read == imageSize)
+    if (bytesRead == imageSize)
     {
         cache.cacheImage(timestamp);
         downloadSuccess = true;
@@ -206,23 +215,27 @@ void ImageDownloader::showLastXHours()
 
     // Adjust for server time offset
     timeinfo.tm_min -= 15;
-    // Move back in time NRFOIMAGESTOSHOW 10-minute intervals
+
+    // Move back to the start of the animation window and record the step size
+    int stepMinutes;
     switch (SATTYPE)
     {
-    case ELEKTROL: // ELEKTROL   20250109-0630.jpg
+    case ELEKTROL: // ELEKTROL updates every 30 minutes
         timeinfo.tm_min -= (NROFIMAGESTOSHOW - 1) * 30;
+        stepMinutes = 30;
         break;
-    case GOES_EAST: // GOES EAST
-    case GOES_WEST: // GOES WEST
-        timeinfo.tm_min -= (NROFIMAGESTOSHOW - 1) * 20;
+    case GOES_EAST: // GOES updates every 10 minutes
+    case GOES_WEST:
+    default:
+        timeinfo.tm_min -= (NROFIMAGESTOSHOW - 1) * 10;
+        stepMinutes = 10;
         break;
     }
 
     mktime(&timeinfo);
 
-    // Loop through NROFIMAGESTOSHOW 10-minute intervals (24 hours)
     for (int i = 0; i < NROFIMAGESTOSHOW; i++)
-    { // Run once more to get the latest image
+    {
         char timeStr[22];
 
         switch (SATTYPE)
@@ -260,8 +273,7 @@ void ImageDownloader::showLastXHours()
             TJpgDec.drawJpg(0, 0, imageBuffer, imageSize);
         }
 
-        // Move foreward 10 minutes for next image
-        timeinfo.tm_min += 10;
+        timeinfo.tm_min += stepMinutes;
         mktime(&timeinfo);
     }
 }
