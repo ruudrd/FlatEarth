@@ -138,7 +138,6 @@ void setup() {
 
    // Initialize image cache
    cache.begin();
-   cache.cleanup();
 }
 
 /**

@@ -61,6 +61,6 @@
 #define NROFIMAGES_ELEKTROL 48
 #define NROFIMAGES_EPIC 24
 
-#define CACHE_SIZE 200
+#define CACHE_SIZE 145
 
 #endif

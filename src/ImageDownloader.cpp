@@ -122,21 +122,21 @@ String ImageDownloader::constructUrl(String timestamp)
     {
     case GOES_EAST: // EAST
         url = String(IMAGEKIT_ENDPOINT) + String(RESIZEURL) +
-              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-75" + "/" +
+              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-70" + "/" +
               String(BASE_URL_EAST) +
               timestamp +
               String(IMAGE_SUFFIX_EAST);
         break;
     case GOES_WEST: // WEST
         url = String(IMAGEKIT_ENDPOINT) + String(RESIZEURL) +
-              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-75" + "/" +
+              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-70" + "/" +
               String(BASE_URL_WEST) +
               timestamp +
               String(IMAGE_SUFFIX_WEST);
         break;
     case ELEKTROL: // ELEKTROL uses dates 20250109-0630.jpg
         url = String(IMAGEKIT_ENDPOINT) + String(RESIZEURL_ELEKTROL) +
-              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-75" + "/" +
+              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-70" + "/" +
               timestamp + ".jpg";
 
         break;

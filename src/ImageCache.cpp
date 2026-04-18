@@ -66,7 +66,7 @@ String ImageCache::getCachePath(const String& timestamp) {
  */
 bool ImageCache::cacheImage(const String& timestamp) {
     //Check available space
-    if (LittleFS.usedBytes() + imageSize > LittleFS.totalBytes() * 0.9) { // Leave 10% free
+    if (LittleFS.usedBytes() + imageSize > LittleFS.totalBytes() * 0.99) { // Leave 1% free
         if (DEBUG_ENABLED) {
             Serial.println("LittleFS running low on space, cleaning old files...");
         }
@@ -168,10 +168,10 @@ void ImageCache::cleanup() {
         }
     }
 
-    // Remove oldest files until LittleFS usage is below 50% (or no more files)
+    // Remove oldest files until there is room for the incoming image (or no more files)
     // Each pass scans for the lexicographically smallest (= chronologically oldest) file
     int filesRemoved = 0;
-    size_t targetUsage = LittleFS.totalBytes() / 2;
+    size_t targetUsage = LittleFS.totalBytes() - imageSize;
 
     while (LittleFS.usedBytes() > targetUsage) {
         String oldestPath;
