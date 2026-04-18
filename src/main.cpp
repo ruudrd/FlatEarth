@@ -1,161 +1,102 @@
-/**
-* GOES-16/17 Satellite Image Display
-*
-* This program downloads and displays GOES satellite images on a TFT display
-* Features include image caching, automatic updates, and 24-hour animation
-*/
+// main.cpp — FlatEarth satellite display
+//
+// Fetches GOES / ElektroL satellite imagery via ImageKit.io, caches it on
+// LittleFS, and animates the last 24 hours on a round TFT display.
+//
+// Boot sequence: display → WiFi → NTP → cache → loop
+// Loop:          download latest frame → draw → animate 24 h → wait
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <TJpg_Decoder.h>
-#include <SPI.h>
-#include <Arduino_GFX_Library.h>
 #include <time.h>
 #include <esp_task_wdt.h>
+
 #include "config.h"
+#include "Display.h"
+#include "WiFiManager.h"
 #include "ImageCache.h"
 #include "ImageDownloader.h"
 
-// Display objects — board-specific wiring, unified library
-#ifdef BOARD_WAVESHARE
-// Waveshare ESP32-S3-Touch-LCD-1.46B: SPD2010 412x412, QSPI
-Arduino_DataBus *_bus = new Arduino_ESP32QSPI(
-    21 /* CS */, 40 /* SCK */, 46 /* D0 */, 45 /* D1 */, 42 /* D2 */, 41 /* D3 */);
-Arduino_GFX *gfx = new Arduino_SPD2010(_bus, GFX_NOT_DEFINED);
-#else
-// Generic ESP32 + GC9A01 240x240, standard SPI
-Arduino_DataBus *_bus = new Arduino_ESP32SPI(17 /* DC */, 5 /* CS */, 18 /* SCK */, 23 /* MOSI */);
-Arduino_GFX *gfx = new Arduino_GC9A01(_bus, 4 /* RST */);
-#endif
+// ── Shared image buffer ───────────────────────────────────────────────────────
+// Owned here; extern'd in ImageDownloader.h so both the downloader and cache
+// can read and write the same allocation without passing pointers everywhere.
+uint8_t *imageBuffer = nullptr;
+size_t   imageSize   = 0;
 
-uint8_t *imageBuffer = NULL;         // Buffer to hold downloaded/cached images
-size_t imageSize = 0;                // Size of current image in buffer
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
-* Callback function for TJpg_Decoder
-* Pushes decoded image data to the display
-*/
-bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
-    gfx->draw16bitRGBBitmap(x, y, bitmap, w, h);
-    return true;
+// Print a one-time hardware summary to Serial so it is easy to confirm the
+// correct board and partition layout are in use.
+static void printSystemInfo() {
+    Serial.println(F("\n##################################"));
+    Serial.println(F("ESP32 hardware summary:"));
+    Serial.printf("  Heap:    %d total, %d free\n",   ESP.getHeapSize(),      ESP.getFreeHeap());
+    Serial.printf("  PSRAM:   %d total, %d free\n",   ESP.getPsramSize(),     ESP.getFreePsram());
+    Serial.printf("  Flash:   %d bytes @ %d Hz\n",    ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
+    Serial.printf("  Sketch:  %d bytes, %d free\n",   ESP.getSketchSize(),    ESP.getFreeSketchSpace());
+    Serial.printf("  Chip:    %s rev%d @ %d MHz  SDK %s\n",
+                  ESP.getChipModel(), ESP.getChipRevision(),
+                  ESP.getCpuFreqMHz(), ESP.getSdkVersion());
+    Serial.println(F("##################################\n"));
 }
 
-/**
-* Initialize and manage WiFi connection
-* Attempts to connect to primary network, falls back to secondary if needed
-*/
-void setupWiFi() {
-   if (DEBUG_ENABLED)
-       Serial.println("Connecting to primary WiFi...");
-   WiFi.setHostname(DEVICENAME);
-   WiFi.begin(WIFI_SSID1, WIFI_PASSWORD1);
+// ── Arduino entry points ──────────────────────────────────────────────────────
 
-   int attempts = 0;
-   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-       delay(500);
-       if (DEBUG_ENABLED)
-           Serial.print(".");
-       attempts++;
-   }
-
-   if (WiFi.status() != WL_CONNECTED) {
-       if (DEBUG_ENABLED)
-           Serial.println("\nTrying backup WiFi...");
-       WiFi.begin(WIFI_SSID2, WIFI_PASSWORD2);
-       attempts = 0;
-
-       while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-           delay(500);
-           if (DEBUG_ENABLED)
-               Serial.print(".");
-           attempts++;
-       }
-   }
-
-   if (WiFi.status() == WL_CONNECTED && DEBUG_ENABLED) {
-       Serial.println("\nWiFi connected!");
-   }
-}
-
-/**
-* System initialization
-*/
 void setup() {
-   Serial.begin(SERIAL_SPEED);
-#ifdef BOARD_WAVESHARE
-   delay(3000);  // USB CDC needs time to establish connection on ESP32-S3
-#endif
-   esp_task_wdt_deinit();  // Disable task watchdog — long downloads trip it on IDF 5.x
-   if (DEBUG_ENABLED)
-       Serial.println("\nGOES-16 Display starting...");
+    Serial.begin(SERIAL_SPEED);
 
-   Serial.println(F("\n##################################"));
-   Serial.println(F("ESP32 Information:"));
-   Serial.printf("Internal Total Heap %d, Internal Used Heap %d, Internal Free Heap %d\n",
-                 ESP.getHeapSize(), ESP.getHeapSize() - ESP.getFreeHeap(), ESP.getFreeHeap());
-   Serial.printf("Sketch Size %d, Free Sketch Space %d\n",
-                 ESP.getSketchSize(), ESP.getFreeSketchSpace());
-   Serial.printf("SPIRam Total heap %d, SPIRam Free Heap %d\n",
-                 ESP.getPsramSize(), ESP.getFreePsram());
-   Serial.printf("Chip Model %s, ChipRevision %d, Cpu Freq %d, SDK Version %s\n",
-                 ESP.getChipModel(), ESP.getChipRevision(), ESP.getCpuFreqMHz(), ESP.getSdkVersion());
-   Serial.printf("Flash Size %d, Flash Speed %d\n",
-                 ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
-   Serial.println(F("##################################\n\n"));
-
-   delay(1000);
-
-   // Initialize display
 #ifdef BOARD_WAVESHARE
-   pinMode(7, OUTPUT);
-   digitalWrite(7, HIGH);  // Power enable
-#endif
-   if (!gfx->begin()) {
-       Serial.println("ERROR: Display init failed!");
-   } else {
-       Serial.println("Display init OK");
-   }
-   gfx->setRotation(DISPLAY_ROTATION);
-   gfx->fillScreen(0x0000);
-#ifdef BOARD_WAVESHARE
-   pinMode(5, OUTPUT);
-   digitalWrite(5, HIGH);  // Backlight
+    // USB CDC on the ESP32-S3 needs a moment to enumerate before Serial output
+    // is visible; without this delay the first log lines are lost.
+    delay(3000);
 #endif
 
-   // Setup JPEG decoder
-   TJpgDec.setSwapBytes(false);  // Arduino_GFX expects native-endian RGB565
-   TJpgDec.setCallback(tft_output);
+    // Disable the task watchdog — image downloads can take several seconds and
+    // would otherwise trigger a reset on IDF 5.x with the default WDT timeout.
+    esp_task_wdt_deinit();
 
-   // Initialize network and time
-   setupWiFi();
+    if (DEBUG_ENABLED) Serial.println("\nFlatEarth display starting...");
+    printSystemInfo();
 
-   struct tm tempTimeinfo;
-   configTime(GMT_OFFSET_SEC, 0, NTP_SERVER);
-   Serial.println("Waiting for time to be set");
-   while (!getLocalTime(&tempTimeinfo)) {
-       Serial.print(".");
-   }
+    initDisplay();
 
-   // Initialize image cache
-   cache.begin();
+    // Wire the JPEG decoder to the display callback. setSwapBytes(false) because
+    // Arduino_GFX expects native-endian (little-endian) RGB565.
+    TJpgDec.setSwapBytes(false);
+    TJpgDec.setCallback(tft_output);
+
+    setupWiFi();
+
+    // Synchronise the RTC via NTP. Block until the time is valid so that image
+    // URL timestamps are correct from the very first download.
+    configTime(GMT_OFFSET_SEC, 0, NTP_SERVER);
+    if (DEBUG_ENABLED) Serial.print("Waiting for NTP time");
+    struct tm t;
+    while (!getLocalTime(&t)) {
+        if (DEBUG_ENABLED) Serial.print(".");
+        delay(500);
+    }
+    if (DEBUG_ENABLED) Serial.println(" OK");
+
+    cache.begin();
 }
 
-/**
-* Main program loop
-*/
 void loop() {
-   if (WiFi.status() == WL_CONNECTED) {
-       if (ImageDownloader::downloadImage(ImageDownloader::getFormattedTime())) {
-           if (DEBUG_ENABLED) Serial.println("Drawing image...");
-           TJpgDec.drawJpg(0, 0, imageBuffer, imageSize);
-           if (DEBUG_ENABLED) Serial.println("Image drawn");
-       }
-   } else {
-       if (DEBUG_ENABLED) Serial.println("WiFi disconnected, attempting reconnect...");
-       setupWiFi();
-   }
+    if (WiFi.status() != WL_CONNECTED) {
+        if (DEBUG_ENABLED) Serial.println("WiFi lost, reconnecting...");
+        setupWiFi();
+        return;
+    }
 
-   if (DEBUG_ENABLED) Serial.println("Waiting for next update...");
-   ImageDownloader::showLastXHours();
-   delay(UPDATE_INTERVAL_MS);
+    // Fetch and display the most recent satellite image.
+    String ts = ImageDownloader::getFormattedTime();
+    if (ImageDownloader::downloadImage(ts)) {
+        if (DEBUG_ENABLED) Serial.println("Drawing latest frame...");
+        TJpgDec.drawJpg(0, 0, imageBuffer, imageSize);
+    }
+
+    // Play back the last 24 hours as an animation, then pause before the next update.
+    ImageDownloader::showLastXHours();
+    delay(UPDATE_INTERVAL_MS);
 }

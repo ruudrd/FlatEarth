@@ -1,275 +1,179 @@
+// ImageDownloader.cpp — satellite image retrieval and 24-hour animation playback.
+
 #include "ImageDownloader.h"
 #include "config.h"
 #include <TJpg_Decoder.h>
 
-/**
- * Download or load from cache a GOES satellite image for a specific timestamp
- * @param timestamp The formatted timestamp string for the image
- * @return true if image was successfully retrieved, false otherwise
- */
-bool ImageDownloader::downloadImage(String timestamp)
-{
+// ── Private helpers ───────────────────────────────────────────────────────────
 
-    // Try loading from cache first
-    if (cache.loadImage(timestamp))
-    {
-        if (DEBUG_ENABLED)
-            Serial.print("Cache! ");
+// Format a normalised tm struct as the timestamp string expected by the active
+// satellite source's CDN path.
+// GOES East/West: "YYYYDDDHHMM"  — 4-digit year, 3-digit day-of-year, HHMM
+//                                   with minutes floored to the nearest 10.
+// ElektroL:       "YYYYMMDD-HHMM" — calendar date, minutes floored to nearest 30.
+String ImageDownloader::formatTimestamp(const struct tm& t) {
+    char buf[22];
+    switch (SATTYPE) {
+    case ELEKTROL:
+        snprintf(buf, sizeof(buf), "%04d%02d%02d-%02d%02d",
+                 t.tm_year + 1900,
+                 t.tm_mon  + 1,
+                 t.tm_mday,
+                 t.tm_hour,
+                 (t.tm_min / 30) * 30);  // snap to 0 or 30
+        break;
+    case GOES_EAST:
+    case GOES_WEST:
+    default:
+        snprintf(buf, sizeof(buf), "%d%03d%04d",
+                 t.tm_year + 1900,
+                 t.tm_yday + 1,                    // day-of-year, 1-based
+                 t.tm_hour * 100 + (t.tm_min / 10) * 10);  // HHMM, snapped to 10-min
+        break;
+    }
+    return String(buf);
+}
+
+// Build the full ImageKit proxy URL for a given timestamp.
+// ImageKit applies the resize transform (width, height, quality) server-side
+// before returning the JPEG, so the ESP32 never handles the full-res image.
+String ImageDownloader::constructUrl(const String& timestamp) {
+    String resize = "tr:w-" + String(DISPLAY_WIDTH) +
+                    ",h-"   + String(DISPLAY_HEIGHT) +
+                    ",q-"   + String(JPEG_QUALITY) + "/";
+    switch (SATTYPE) {
+    case GOES_EAST:
+        return String(IMAGEKIT_ENDPOINT) + RESIZEURL + resize +
+               BASE_URL_EAST + timestamp + IMAGE_SUFFIX_EAST;
+    case GOES_WEST:
+        return String(IMAGEKIT_ENDPOINT) + RESIZEURL + resize +
+               BASE_URL_WEST + timestamp + IMAGE_SUFFIX_WEST;
+    case ELEKTROL:
+        return String(IMAGEKIT_ENDPOINT) + RESIZEURL_ELEKTROL + resize +
+               timestamp + ".jpg";
+    default:
+        return "";
+    }
+}
+
+// ── Public methods ────────────────────────────────────────────────────────────
+
+// Fetch the image for the given timestamp.
+// Cache hit: loads the JPEG from LittleFS into imageBuffer — no network call.
+// Cache miss: opens an HTTP connection, downloads the JPEG into imageBuffer,
+//             then writes the result to LittleFS for future cache hits.
+bool ImageDownloader::downloadImage(const String& timestamp) {
+    if (cache.loadImage(timestamp)) {
+        if (DEBUG_ENABLED) Serial.print("Cache! ");
         return true;
     }
 
-    //  if (DEBUG_ENABLED)
-    //      Serial.println("Starting download...");
+    String url = constructUrl(timestamp);
+    if (DEBUG_ENABLED) { Serial.print("URL: "); Serial.println(url); }
 
     HTTPClient http;
-    bool downloadSuccess = false;
-    String url = constructUrl(timestamp);
-
-    if (DEBUG_ENABLED)
-    {
-        Serial.print("URL: ");
-        Serial.println(url);
-    }
-
-    // Initialize HTTP connection
     http.begin(url);
     int httpCode = http.GET();
 
-    // Check if HTTP request was successful
-    if (httpCode != HTTP_CODE_OK)
-    {
-        if (DEBUG_ENABLED)
-        {
-            Serial.print("HTTP GET failed, error: ");
-            Serial.println(httpCode);
-        }
+    if (httpCode != HTTP_CODE_OK) {
+        if (DEBUG_ENABLED) { Serial.print("HTTP error: "); Serial.println(httpCode); }
         http.end();
         return false;
     }
 
-    // Free previous image buffer if it exists
-    if (imageBuffer != NULL)
-    {
-        free(imageBuffer);
-    }
-
-    // Get size of incoming image
     imageSize = http.getSize();
-    if (DEBUG_ENABLED)
-    {
-        Serial.print("Image size: ");
-        Serial.println(imageSize);
-    }
+    if (DEBUG_ENABLED) { Serial.print("Image size: "); Serial.println(imageSize); }
 
-    // Allocate memory for new image
+    if (imageBuffer) free(imageBuffer);
     imageBuffer = (uint8_t *)malloc(imageSize);
-    if (!imageBuffer)
-    {
-        if (DEBUG_ENABLED)
-            Serial.println("Memory allocation failed");
+    if (!imageBuffer) {
+        if (DEBUG_ENABLED) Serial.println("malloc failed");
         http.end();
         return false;
     }
 
-    // Download image data in chunks
+    // Read the stream in chunks, yielding to FreeRTOS between chunks so the
+    // task watchdog is not starved during slow downloads.
     WiFiClient *stream = http.getStreamPtr();
     size_t bytesRead = 0;
-    unsigned long lastProgress = millis();
+    unsigned long lastActivity = millis();
 
-    while (bytesRead < imageSize)
-    {
+    while (bytesRead < imageSize) {
         size_t available = stream->available();
-        if (available)
-        {
+        if (available) {
             bytesRead += stream->readBytes(imageBuffer + bytesRead, available);
-            lastProgress = millis();
-        }
-        else
-        {
-            if (millis() - lastProgress > 5000)
-            {
-                if (DEBUG_ENABLED)
-                    Serial.println("Download timeout");
+            lastActivity = millis();
+        } else {
+            if (millis() - lastActivity > DOWNLOAD_TIMEOUT_MS) {
+                if (DEBUG_ENABLED) Serial.println("Download timeout");
                 break;
             }
-            delay(1); // Yield to FreeRTOS — prevents WDT starvation
+            delay(1);  // yield
         }
     }
 
     http.end();
 
-    // Cache the image if download was successful
-    if (bytesRead == imageSize)
-    {
-        cache.cacheImage(timestamp);
-        downloadSuccess = true;
-        if (DEBUG_ENABLED)
-            Serial.println("Download complete");
-    }
+    if (bytesRead != imageSize) return false;
 
-    return downloadSuccess;
+    cache.cacheImage(timestamp);
+    if (DEBUG_ENABLED) Serial.println("Download complete");
+    return true;
 }
 
-/**
- * Construct the URL for the image based on satellite type and timestamp
- * @param timestamp The formatted timestamp string
- * @return Complete URL for image download
- */
-String ImageDownloader::constructUrl(String timestamp)
-{
-    String url;
-    switch (SATTYPE)
-    {
-    case GOES_EAST: // EAST
-        url = String(IMAGEKIT_ENDPOINT) + String(RESIZEURL) +
-              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-70" + "/" +
-              String(BASE_URL_EAST) +
-              timestamp +
-              String(IMAGE_SUFFIX_EAST);
-        break;
-    case GOES_WEST: // WEST
-        url = String(IMAGEKIT_ENDPOINT) + String(RESIZEURL) +
-              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-70" + "/" +
-              String(BASE_URL_WEST) +
-              timestamp +
-              String(IMAGE_SUFFIX_WEST);
-        break;
-    case ELEKTROL: // ELEKTROL uses dates 20250109-0630.jpg
-        url = String(IMAGEKIT_ENDPOINT) + String(RESIZEURL_ELEKTROL) +
-              "tr:w-" + String(DISPLAY_WIDTH) + ",h-" + String(DISPLAY_HEIGHT) + ",q-70" + "/" +
-              timestamp + ".jpg";
-
-        break;
-    }
-    return url;
-}
-
-/**
- * Generate a formatted timestamp string for the current time
- * Adjusts for server time offset and rounds to nearest 10 minutes
- * @return Formatted timestamp string in YYYYDDDHHMM format
- */
-String ImageDownloader::getFormattedTime()
-{
+// Return the timestamp string for the most recent available satellite image.
+// Subtracts SERVER_LAG_MINUTES from the current UTC time to compensate for the
+// delay between image capture and CDN availability, then snaps to the cadence.
+String ImageDownloader::getFormattedTime() {
     struct tm timeinfo;
-
-    if (!getLocalTime(&timeinfo))
-    {
-        if (DEBUG_ENABLED)
-            Serial.println("Failed to get time");
+    if (!getLocalTime(&timeinfo)) {
+        if (DEBUG_ENABLED) Serial.println("Failed to get time");
         return "";
     }
+    timeinfo.tm_min -= SERVER_LAG_MINUTES;
+    mktime(&timeinfo);  // normalise (handles minute underflow across hour boundaries)
 
-    // Adjust for server time offset
-    timeinfo.tm_min -= 15;
-    mktime(&timeinfo);
-
-    // Format timestamp string (YYYYDDDHHMM)
-    char timeStr[22];
-    switch (SATTYPE)
-    {
-
-    case ELEKTROL: // ELEKTROL   20250109-0630.jpg
-
-        snprintf(timeStr, sizeof(timeStr), "%04d%02d%02d-%02d%02d",
-                 timeinfo.tm_year + 1900,      // Year
-                 timeinfo.tm_mon + 1,          // Month
-                 timeinfo.tm_mday,             // Day
-                 timeinfo.tm_hour,             // Hour
-                 (timeinfo.tm_min / 30) * 30); // Minutes (0 or 30)
-
-        break;
-
-    case GOES_EAST: // GOES EAST
-    case GOES_WEST: // GOES WEST
-
-        snprintf(timeStr, sizeof(timeStr), "%d%03d%04d",
-                 timeinfo.tm_year + 1900,          // Year
-                 timeinfo.tm_yday + 1,             // Day of year (1-366)
-                 (timeinfo.tm_hour * 100) +        // Hours (HHMM format)
-                     (timeinfo.tm_min / 10) * 10); // Minutes rounded to nearest 10
-        break;
+    if (DEBUG_ENABLED) {
+        Serial.printf("Time: %02d:%02d, Day: %d\n",
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_yday + 1);
     }
-
-    if (DEBUG_ENABLED)
-    {
-        Serial.printf("Time: %02d:%02d, Day: %d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_yday + 1);
-        Serial.printf("Generated timestamp: %s\n", timeStr);
-    }
-    return String(timeStr);
+    return formatTimestamp(timeinfo);
 }
 
-/**
- * Display images from the last 24 hours in sequence
- * Downloads NROFIMAGESTOSHOW images (one every 10 minutes) and displays them
- */
-void ImageDownloader::showLastXHours()
-{
+// Iterate forward through all NROFIMAGESTOSHOW frames of the 24-hour window,
+// downloading and immediately drawing each one. The window starts at
+// (now − SERVER_LAG_MINUTES − (NROFIMAGESTOSHOW−1) × step) so that the last
+// frame shown is always the most recently available image.
+void ImageDownloader::showLastXHours() {
     struct tm timeinfo;
-    if (!getLocalTime(&timeinfo))
-    {
-        if (DEBUG_ENABLED)
-            Serial.println("Failed to get time");
+    if (!getLocalTime(&timeinfo)) {
+        if (DEBUG_ENABLED) Serial.println("Failed to get time");
         return;
     }
 
-    // Adjust for server time offset
-    timeinfo.tm_min -= 15;
+    // Apply the same server-lag correction used in getFormattedTime().
+    timeinfo.tm_min -= SERVER_LAG_MINUTES;
 
-    // Move back to the start of the animation window and record the step size
+    // Rewind to the start of the animation window.
     int stepMinutes;
-    switch (SATTYPE)
-    {
-    case ELEKTROL: // ELEKTROL updates every 30 minutes
-        timeinfo.tm_min -= (NROFIMAGESTOSHOW - 1) * 30;
+    switch (SATTYPE) {
+    case ELEKTROL:
         stepMinutes = 30;
         break;
-    case GOES_EAST: // GOES updates every 10 minutes
+    case GOES_EAST:
     case GOES_WEST:
     default:
-        timeinfo.tm_min -= (NROFIMAGESTOSHOW - 1) * 10;
         stepMinutes = 10;
         break;
     }
-
+    timeinfo.tm_min -= (NROFIMAGESTOSHOW - 1) * stepMinutes;
     mktime(&timeinfo);
 
-    for (int i = 0; i < NROFIMAGESTOSHOW; i++)
-    {
-        char timeStr[22];
+    for (int i = 0; i < NROFIMAGESTOSHOW; i++) {
+        String ts = formatTimestamp(timeinfo);
+        if (DEBUG_ENABLED) Serial.printf("Frame %d/%d: %s\n", i + 1, NROFIMAGESTOSHOW, ts.c_str());
 
-        switch (SATTYPE)
-        {
-
-        case ELEKTROL: // ELEKTROL   20250109-0630.jpg
-
-            snprintf(timeStr, sizeof(timeStr), "%04d%02d%02d-%02d%02d",
-                     timeinfo.tm_year + 1900,      // Year
-                     timeinfo.tm_mon + 1,          // Month
-                     timeinfo.tm_mday,             // Day
-                     timeinfo.tm_hour,             // Hour
-                     (timeinfo.tm_min / 30) * 30); // Minutes (0 or 30)
-
-            break;
-
-        case GOES_EAST: // GOES EAST
-        case GOES_WEST: // GOES WEST
-
-            snprintf(timeStr, sizeof(timeStr), "%d%03d%04d",
-                     timeinfo.tm_year + 1900,          // Year
-                     timeinfo.tm_yday + 1,             // Day of year (1-366)
-                     (timeinfo.tm_hour * 100) +        // Hours (HHMM format)
-                         (timeinfo.tm_min / 10) * 10); // Minutes rounded to nearest 10
-            break;
-        }
-        if (DEBUG_ENABLED)
-        {
-            Serial.printf("I %d/%d: %s\n", i + 1, NROFIMAGESTOSHOW, timeStr);
-        }
-
-        // Download and display each image
-        if (downloadImage(String(timeStr)))
-        {
+        if (downloadImage(ts)) {
             TJpgDec.drawJpg(0, 0, imageBuffer, imageSize);
         }
 

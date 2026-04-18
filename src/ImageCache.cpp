@@ -1,189 +1,138 @@
+// ImageCache.cpp — LittleFS-backed JPEG frame cache.
+
 #include "ImageCache.h"
 #include "config.h"
 
-// External references to the image buffer and size variables defined in main
+// imageBuffer and imageSize are owned by main.cpp and shared across all modules.
 extern uint8_t *imageBuffer;
-extern size_t imageSize;
+extern size_t   imageSize;
 
-// Global cache instance
+// Single global instance used by ImageDownloader and main.
 ImageCache cache;
 
-/**
- * Initialize the cache system
- * @return true if LittleFS mounted successfully, false otherwise
- */
+// ── Public methods ────────────────────────────────────────────────────────────
+
+// Mount LittleFS. If the first mount attempt fails (e.g. after a power loss that
+// left the filesystem in a bad state), format and retry once. Initialises the
+// in-memory ring buffer to all-invalid so loadImage() falls through to the
+// filesystem on every first lookup after a reboot.
 bool ImageCache::begin() {
     if (DEBUG_ENABLED) Serial.println("Initializing cache system...");
-    
-    // Format LittleFS if mounting fails
-    if(!LittleFS.begin(true)) {
+
+    if (!LittleFS.begin(true)) {
         if (DEBUG_ENABLED) Serial.println("LittleFS mount failed, attempting format...");
-        if(!LittleFS.format()) {
-            if (DEBUG_ENABLED) Serial.println("LittleFS format failed");
-            return false;
-        }
-        if(!LittleFS.begin()) {
-            if (DEBUG_ENABLED) Serial.println("LittleFS mount after format failed");
+        if (!LittleFS.format() || !LittleFS.begin()) {
+            if (DEBUG_ENABLED) Serial.println("LittleFS format/mount failed");
             return false;
         }
     }
 
-    // Print LittleFS information
     if (DEBUG_ENABLED) {
-        Serial.printf("Total LittleFS space: %d bytes\n", LittleFS.totalBytes());
-        Serial.printf("Used LittleFS space: %d bytes\n", LittleFS.usedBytes());
-        Serial.printf("Free LittleFS space: %d bytes\n", LittleFS.totalBytes() - LittleFS.usedBytes());
+        Serial.printf("LittleFS: %d bytes total, %d used, %d free\n",
+                      LittleFS.totalBytes(), LittleFS.usedBytes(),
+                      LittleFS.totalBytes() - LittleFS.usedBytes());
     }
 
-    // Initialize cache entries
-    for(int i = 0; i < CACHE_SIZE; i++) {
-        entries[i].valid = false;
-    }
+    for (int i = 0; i < CACHE_SIZE; i++) entries[i].valid = false;
 
     if (DEBUG_ENABLED) Serial.println("Cache system initialized successfully");
     return true;
 }
 
-
-
-/**
- * Generate the filesystem path for a cached image
- * @param timestamp The image timestamp to generate path for
- * @return Full path to the cached image file
- */
+// Look up and return /cache/<timestamp>.jpg, creating /cache/ if needed.
 String ImageCache::getCachePath(const String& timestamp) {
-    // Ensure directory exists before each write
-    if (!LittleFS.exists("/cache")) {
-        LittleFS.mkdir("/cache");
-    }
+    if (!LittleFS.exists("/cache")) LittleFS.mkdir("/cache");
     return "/cache/" + timestamp + ".jpg";
 }
 
-/**
- * Save current image buffer to cache
- * @param timestamp The timestamp to associate with this image
- * @return true if image was cached successfully, false otherwise
- */
+// Write imageBuffer to LittleFS. If the filesystem is nearly full, evict the
+// oldest cached frame first to make room for this one.
 bool ImageCache::cacheImage(const String& timestamp) {
-    //Check available space
-    if (LittleFS.usedBytes() + imageSize > LittleFS.totalBytes() * 0.99) { // Leave 1% free
-        if (DEBUG_ENABLED) {
-            Serial.println("LittleFS running low on space, cleaning old files...");
-        }
-        cleanup();  // Remove old files
+    if (LittleFS.usedBytes() + imageSize > LittleFS.totalBytes() * CACHE_FILL_THRESHOLD) {
+        if (DEBUG_ENABLED) Serial.println("Cache full, evicting oldest frame...");
+        cleanup();
     }
 
-    if (imageBuffer == nullptr || imageSize == 0) {
-        if (DEBUG_ENABLED) Serial.println("Invalid image buffer or size");
+    if (!imageBuffer || imageSize == 0) {
+        if (DEBUG_ENABLED) Serial.println("Invalid image buffer");
         return false;
     }
-    
+
     String path = getCachePath(timestamp);
-    File file = LittleFS.open(path, "w",true);
+    File file = LittleFS.open(path, "w", true);
     if (!file) {
-        if (DEBUG_ENABLED) {
-            Serial.print("Failed to open file for writing: ");
-            Serial.println(path);
-        }
+        if (DEBUG_ENABLED) { Serial.print("Cannot open for write: "); Serial.println(path); }
         return false;
     }
-    
+
     size_t written = file.write(imageBuffer, imageSize);
     file.close();
-    
+
     if (written != imageSize) {
         if (DEBUG_ENABLED) {
-            Serial.printf("Write failed: %d of %d bytes written\n", written, imageSize);
+            Serial.printf("Write incomplete: %d of %d bytes\n", written, imageSize);
         }
         return false;
     }
-    
+
     entries[writeIndex] = {timestamp, true};
     writeIndex = (writeIndex + 1) % CACHE_SIZE;
-    
-    if (DEBUG_ENABLED) {
-        Serial.printf("Cached image %s (%d bytes)\n", timestamp.c_str(), written);
-    }
+
+    if (DEBUG_ENABLED) Serial.printf("Cached %s (%d bytes)\n", timestamp.c_str(), written);
     return true;
 }
 
-/**
- * Load an image from cache into the image buffer
- * @param timestamp The timestamp of the image to load
- * @return true if image was loaded successfully, false if not found or error
- */
-bool ImageCache::loadImage(const String &timestamp)
-{
-    // Check if file exists in cache
+// Load a cached JPEG into imageBuffer / imageSize.
+// Deletes the file and returns false if it exists but is zero-length (corrupt).
+bool ImageCache::loadImage(const String& timestamp) {
     String path = getCachePath(timestamp);
-    if (!LittleFS.exists(path))
-        return false;
+    if (!LittleFS.exists(path)) return false;
 
-    // Open cached file
     File file = LittleFS.open(path, "r");
-    if (!file)
-        return false;
+    if (!file) return false;
 
-    // Allocate buffer for image data
     imageSize = file.size();
     if (imageSize == 0) {
         file.close();
-        LittleFS.remove(path);  // Remove corrupt empty file
+        LittleFS.remove(path);  // remove corrupt empty file
         return false;
     }
-    if (imageBuffer)
-        free(imageBuffer);
-    imageBuffer = (uint8_t *)malloc(imageSize);
 
-    // Verify allocation succeeded
-    if (!imageBuffer)
-    {
+    if (imageBuffer) free(imageBuffer);
+    imageBuffer = (uint8_t *)malloc(imageSize);
+    if (!imageBuffer) {
         file.close();
         return false;
     }
 
-    // Read image data and close file
     file.read(imageBuffer, imageSize);
     file.close();
     return true;
 }
 
-/**
- * Remove the oldest cached images from storage to free space
- * Scans LittleFS directly so it works correctly across reboots
- */
+// Evict exactly enough old frames to make room for one incoming image.
+// Each pass does a full directory scan to find the lexicographically smallest
+// filename (= chronologically oldest frame) and removes it. Continues until
+// free space exceeds imageSize.
 void ImageCache::cleanup() {
     if (DEBUG_ENABLED) {
-        Serial.println("Starting cache cleanup...");
-        Serial.printf("Before cleanup - Used space: %d bytes\n", LittleFS.usedBytes());
-
-        File dir = LittleFS.open("/cache");
-        if (dir && dir.isDirectory()) {
-            File f = dir.openNextFile();
-            while (f) {
-                Serial.printf("Found file: %s, size: %d\n", f.path(), f.size());
-                f = dir.openNextFile();
-            }
-            dir.close();
-        }
+        Serial.printf("Cache cleanup — used before: %d bytes\n", LittleFS.usedBytes());
     }
 
-    // Remove oldest files until there is room for the incoming image (or no more files)
-    // Each pass scans for the lexicographically smallest (= chronologically oldest) file
-    int filesRemoved = 0;
     size_t targetUsage = LittleFS.totalBytes() - imageSize;
+    int    removed     = 0;
 
     while (LittleFS.usedBytes() > targetUsage) {
+        // Scan /cache/ for the oldest (lexicographically smallest) filename.
         String oldestPath;
         File dir = LittleFS.open("/cache");
         if (!dir || !dir.isDirectory()) break;
+
         File f = dir.openNextFile();
         while (f) {
             if (!f.isDirectory()) {
                 String fp = String(f.path());
-                if (oldestPath.isEmpty() || fp < oldestPath) {
-                    oldestPath = fp;
-                }
+                if (oldestPath.isEmpty() || fp < oldestPath) oldestPath = fp;
             }
             f = dir.openNextFile();
         }
@@ -192,19 +141,20 @@ void ImageCache::cleanup() {
         if (oldestPath.isEmpty()) break;
 
         if (LittleFS.remove(oldestPath)) {
-            filesRemoved++;
-            if (DEBUG_ENABLED) Serial.printf("Removed: %s\n", oldestPath.c_str());
+            removed++;
+            if (DEBUG_ENABLED) Serial.printf("Evicted: %s\n", oldestPath.c_str());
         } else {
-            break;
+            break;  // stop if a removal fails to avoid an infinite loop
         }
     }
 
-    // Invalidate in-memory entries
+    // Invalidate the in-memory ring buffer so subsequent loadImage() calls
+    // consult the filesystem rather than stale metadata.
     for (int i = 0; i < CACHE_SIZE; i++) entries[i].valid = false;
     writeIndex = 0;
 
     if (DEBUG_ENABLED) {
-        Serial.printf("Cleanup complete - Removed %d files\n", filesRemoved);
-        Serial.printf("After cleanup - Used space: %d bytes\n", LittleFS.usedBytes());
+        Serial.printf("Cache cleanup done — removed %d file(s), used after: %d bytes\n",
+                      removed, LittleFS.usedBytes());
     }
 }

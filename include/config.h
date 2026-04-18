@@ -1,66 +1,98 @@
-// config.h
+// config.h — central configuration for the FlatEarth satellite display project.
+// All tuneable parameters live here. Secrets (WiFi credentials, API endpoint)
+// are in secrets.h, which is excluded from version control.
+
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "secrets.h" //Include the secrets.h file for the IMAGEKIT_ENDPOINT and wifi settings.
+#include "secrets.h"
 
-#define DEVICENAME "ESP-FlatEarth"
+// ── Device ──────────────────────────────────────────────────────────────────
+#define DEVICENAME "ESP-FlatEarth"  // mDNS hostname and WiFi station name
 
-// Debug Settings
-#define DEBUG_ENABLED true
-#define SERIAL_SPEED 115200
+// ── Debug ────────────────────────────────────────────────────────────────────
+#define DEBUG_ENABLED true   // Set false to silence all Serial output
+#define SERIAL_SPEED  115200
 
-// Display Settings
+// ── Display ──────────────────────────────────────────────────────────────────
+// DISPLAY_WIDTH/DISPLAY_HEIGHT default to 240×240 (upesy_wroom / GC9A01).
+// The waveshare build environment overrides these to 412×412 via build flags.
 #ifndef DISPLAY_WIDTH
-#define DISPLAY_WIDTH 240
+#define DISPLAY_WIDTH  240
 #endif
 #ifndef DISPLAY_HEIGHT
 #define DISPLAY_HEIGHT 240
 #endif
-#define DISPLAY_ROTATION 0
+#define DISPLAY_ROTATION 0  // 0 = normal  1 = 90°  2 = 180°  3 = 270°
 
-// For refrence, this needs to be set in de User setup.h
-// #define GC9A01_DRIVER
-//  //#define TFT_MISO 19  // (leave TFT SDO disconnected if other SPI devices share MISO)
-//  #define TFT_MOSI 23
-//  #define TFT_SCLK 18
-//  #define TFT_CS   5  // Chip select control pin
-//  #define TFT_DC    17  // Data Command control pin
-//  #define TFT_RST   4  // Reset pin (could connect to RST pin)
-// #define SPI_FREQUENCY  40000000
-// #define SPI_READ_FREQUENCY  20000000 // Optional reduced SPI frequency for reading TFT
+// ── Pin assignments — upesy_wroom / GC9A01 240×240 (standard SPI) ───────────
+#define GC9A01_DC_PIN    17  // Data/Command select
+#define GC9A01_CS_PIN     5  // Chip select
+#define GC9A01_SCK_PIN   18  // SPI clock
+#define GC9A01_MOSI_PIN  23  // SPI data out
+#define GC9A01_RST_PIN    4  // Hardware reset
 
-// Time Settings
-#define NTP_SERVER "pool.ntp.org" // NTP server to use for time synchronization
-#define GMT_OFFSET_SEC 0          // set this to 0 and use the time as is, or if you are on the other side of the world, set this to the offset in seconds from GMT (e.g. for GMT+2, use 2*3600)
-#define UPDATE_INTERVAL_MS 10000  // 10 minutes
+// ── Pin assignments — Waveshare ESP32-S3 / SPD2010 412×412 (QSPI) ───────────
+#define WAVESHARE_POWER_PIN      7  // GPIO that enables the display power rail
+#define WAVESHARE_BACKLIGHT_PIN  5  // GPIO that enables the backlight
+#define WAVESHARE_CS_PIN        21
+#define WAVESHARE_SCK_PIN       40
+#define WAVESHARE_D0_PIN        46
+#define WAVESHARE_D1_PIN        45
+#define WAVESHARE_D2_PIN        42
+#define WAVESHARE_D3_PIN        41
 
-#define SATTYPE GOES_EAST                // Choose which dataset to show, this will determine the number of images to show in the animation and the URL to fetch the images from
-#define NROFIMAGESTOSHOW NROFIMAGES_GOES // Depending on the chosen dataset, we can show an animation of every 20 minutes, for GOES or 30 minutes for ElektroL. The number of images to show for 24 hours is 72 for GOES and 48 for ElektroL. The EPIC has one image every hour, so we can show 24 images
-#define RESIZEURL RESIZEURL_GOES
+// ── WiFi ─────────────────────────────────────────────────────────────────────
+// Credentials (WIFI_SSID1/2, WIFI_PASSWORD1/2) are defined in secrets.h.
+#define WIFI_CONNECT_ATTEMPTS  20   // Attempts per network before trying the backup
+#define WIFI_CONNECT_DELAY_MS 500   // Delay between each attempt (ms)
 
-// GOES Image Settings
+// ── Time ─────────────────────────────────────────────────────────────────────
+#define NTP_SERVER         "pool.ntp.org"
+#define GMT_OFFSET_SEC     0   // UTC offset in seconds (e.g. GMT+2 = 7200).
+                               // Keep 0 — satellite timestamps are always UTC.
+#define SERVER_LAG_MINUTES 15  // Satellite images lag real-time by ~15 min due
+                               // to on-ground processing; subtracted from current
+                               // time when building the image URL.
+
+// ── Image download ───────────────────────────────────────────────────────────
+#define JPEG_QUALITY         70  // ImageKit resize quality (1–100).
+                                 // Lower = smaller files, faster animation.
+#define DOWNLOAD_TIMEOUT_MS 5000 // Abort HTTP stream if no data arrives for this long (ms)
+#define UPDATE_INTERVAL_MS 10000 // Pause between main loop iterations (ms)
+
+// ── Satellite source ─────────────────────────────────────────────────────────
+// Set SATTYPE to choose which satellite feed to display.
+// Also update NROFIMAGESTOSHOW and RESIZEURL to match.
 
 #define GOES_EAST 0
 #define GOES_WEST 1
-#define ELEKTROL 2
+#define ELEKTROL  2
 
+#define SATTYPE          GOES_EAST        // Active satellite source
+#define NROFIMAGESTOSHOW NROFIMAGES_GOES  // Frames per animation cycle
+#define RESIZEURL        RESIZEURL_GOES   // ImageKit subfolder for the chosen source
+
+// Number of images that cover 24 hours for each source
+#define NROFIMAGES_GOES     144  // GOES updates every 10 min  → 144 frames / 24 h
+#define NROFIMAGES_ELEKTROL  48  // ElektroL updates every 30 min → 48 frames / 24 h
+
+// ImageKit subfolder names (appended to IMAGEKIT_ENDPOINT in the request URL)
+#define RESIZEURL_GOES     "GOES/"
 #define RESIZEURL_ELEKTROL "ElektroL/"
-#define RESIZEURL_GOES "GOES/"
-#define RESIZEURL_EPIC "EPIC/"
-#define BASE_URL_EAST "GOES19/ABI/FD/GEOCOLOR/"
-#define BASE_URL_WEST "GOES18/ABI/FD/GEOCOLOR/"
-#define IMAGE_SUFFIX_EAST "_GOES19-ABI-FD-GEOCOLOR-1808x1808.jpg" // 5424x5424.jpg"
-#define IMAGE_SUFFIX_WEST "_GOES18-ABI-FD-GEOCOLOR-1808x1808.jpg" // 5424x5424.jpg"
 
-// Depending on the chosen dataset, we can show an animation of
-// Every 10 minutes for GOES or 30 minutes for ElektroL
-// The number of images to show for 24 hours is 144 for GOES and 48 for ElektroL
-// The EPIC has one image every hour, so we can show 24 images
-#define NROFIMAGES_GOES 144
-#define NROFIMAGES_ELEKTROL 48
-#define NROFIMAGES_EPIC 24
+// NOAA CDN source paths and filename suffixes for each GOES satellite
+#define BASE_URL_EAST     "GOES19/ABI/FD/GEOCOLOR/"
+#define BASE_URL_WEST     "GOES18/ABI/FD/GEOCOLOR/"
+#define IMAGE_SUFFIX_EAST "_GOES19-ABI-FD-GEOCOLOR-1808x1808.jpg"
+#define IMAGE_SUFFIX_WEST "_GOES18-ABI-FD-GEOCOLOR-1808x1808.jpg"
 
+// ── Image cache (LittleFS) ───────────────────────────────────────────────────
+// In-memory ring buffer — tracks recently cached timestamps.
+// Must be at least NROFIMAGESTOSHOW + 1.
 #define CACHE_SIZE 145
+
+// Trigger eviction of the oldest frame when LittleFS reaches this fraction full.
+#define CACHE_FILL_THRESHOLD 0.99f
 
 #endif
