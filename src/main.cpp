@@ -60,26 +60,33 @@ void setup() {
     printSystemInfo();
 
     initDisplay();
+    showStatus("FlatEarth starting...");
 
     // Wire the JPEG decoder to the display callback. setSwapBytes(false) because
     // Arduino_GFX expects native-endian (little-endian) RGB565.
     TJpgDec.setSwapBytes(false);
     TJpgDec.setCallback(tft_output);
 
+    showStatus("Connecting WiFi...");
     setupWiFi();
+    if (WiFi.status() == WL_CONNECTED)
+        showStatus("WiFi OK", 0x07E0);         // green
+    else
+        showStatus("WiFi FAILED", 0xF800);      // red
 
     // Synchronise the RTC via NTP. Block until the time is valid so that image
     // URL timestamps are correct from the very first download.
+    showStatus("Syncing time...");
     configTime(GMT_OFFSET_SEC, 0, NTP_SERVER);
-    if (DEBUG_ENABLED) Serial.print("Waiting for NTP time");
     struct tm t;
-    while (!getLocalTime(&t)) {
-        if (DEBUG_ENABLED) Serial.print(".");
-        delay(500);
-    }
-    if (DEBUG_ENABLED) Serial.println(" OK");
+    while (!getLocalTime(&t)) delay(500);
+    showStatus("Time OK", 0x07E0);
 
-    cache.begin();
+    showStatus("Init cache...");
+    if (cache.begin())
+        showStatus("Cache OK", 0x07E0);
+    else
+        showStatus("Cache FAILED", 0xF800);
 }
 
 void loop() {
@@ -96,7 +103,12 @@ void loop() {
         TJpgDec.drawJpg(0, 0, imageBuffer, imageSize);
     }
 
-    // Play back the last 24 hours as an animation, then pause before the next update.
+    // Play back the last 24 hours as an animation.
     ImageDownloader::showLastXHours();
+
+    // Print cache health to Serial after every full animation cycle so the user
+    // can see how full the cache is and whether quality settings need tuning.
+    cache.printStats();
+
     delay(UPDATE_INTERVAL_MS);
 }

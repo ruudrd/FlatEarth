@@ -158,3 +158,52 @@ void ImageCache::cleanup() {
                       removed, LittleFS.usedBytes());
     }
 }
+
+// Scan /cache/, count files and their total size, then print a summary with a
+// suggestion so the user knows whether JPEG_QUALITY or NROFIMAGESTOSHOW can be tuned.
+void ImageCache::printStats() {
+    int    fileCount = 0;
+    size_t dataBytes = 0;  // sum of actual JPEG sizes (not filesystem overhead)
+
+    File dir = LittleFS.open("/cache");
+    if (dir && dir.isDirectory()) {
+        File f = dir.openNextFile();
+        while (f) {
+            if (!f.isDirectory()) {
+                fileCount++;
+                dataBytes += f.size();
+            }
+            f = dir.openNextFile();
+        }
+        dir.close();
+    }
+
+    size_t fsTotal = LittleFS.totalBytes();
+    size_t fsUsed  = LittleFS.usedBytes();
+    size_t fsFree  = fsTotal - fsUsed;
+    float  fillPct = 100.0f * fsUsed / fsTotal;
+    size_t avgSize = fileCount > 0 ? dataBytes / fileCount : 0;
+    int    maxFrames = avgSize > 0 ? (int)(fsTotal * CACHE_FILL_THRESHOLD / avgSize) : 0;
+
+    Serial.println(F("\n=== Cache stats ==="));
+    Serial.printf("  Frames cached : %d\n",          fileCount);
+    Serial.printf("  Avg frame size: %d bytes\n",     avgSize);
+    Serial.printf("  Max frames fit: ~%d\n",          maxFrames);
+    Serial.printf("  LittleFS used : %d KB / %d KB (%.1f%% full, %d KB free)\n",
+                  fsUsed / 1024, fsTotal / 1024, fillPct, fsFree / 1024);
+
+    // Give an actionable suggestion based on how full the cache is.
+    if (fillPct < 60.0f) {
+        Serial.println(F("  Tip: Cache has plenty of room."));
+        Serial.printf( "       Try raising JPEG_QUALITY above %d, or increasing NROFIMAGESTOSHOW.\n", JPEG_QUALITY);
+    } else if (fillPct < 85.0f) {
+        Serial.println(F("  Tip: Cache usage is healthy — no changes needed."));
+    } else if (fillPct < 95.0f) {
+        Serial.println(F("  Tip: Cache is getting full."));
+        Serial.printf( "       Consider lowering JPEG_QUALITY below %d, or reducing NROFIMAGESTOSHOW.\n", JPEG_QUALITY);
+    } else {
+        Serial.println(F("  Tip: Cache is nearly full — evictions are likely every cycle."));
+        Serial.printf( "       Lower JPEG_QUALITY below %d or reduce NROFIMAGESTOSHOW.\n", JPEG_QUALITY);
+    }
+    Serial.println(F("===================\n"));
+}

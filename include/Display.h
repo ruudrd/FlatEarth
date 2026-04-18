@@ -16,6 +16,11 @@ extern Arduino_GFX *gfx;
 // Must be called once from setup() before drawing anything.
 void initDisplay();
 
+// Print a status line on screen during boot, advancing one line per call.
+// Intended for boot-time feedback only; satellite images overwrite it once running.
+// color is an RGB565 value — use WHITE (0xFFFF), GREEN (0x07E0), or RED (0xF800).
+void showStatus(const char *msg, uint16_t color = 0xFFFF);
+
 // TJpg_Decoder tile callback.
 // The decoder calls this once per 16×16 decoded block; this function forwards
 // the block to the display via gfx->draw16bitRGBBitmap().

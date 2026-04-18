@@ -32,6 +32,24 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) 
     return true;
 }
 
+// ── Boot status overlay ───────────────────────────────────────────────────────
+
+// Tracks the next available line so repeated showStatus() calls stack downward.
+static int16_t _statusY = 10;
+
+// Draw one line of status text on the display and advance the cursor.
+// Uses textSize(2): each character is 12×16 px, so lines are 20 px apart.
+// Stops drawing silently if the text would fall off the bottom of the screen.
+void showStatus(const char *msg, uint16_t color) {
+    const int16_t lineHeight = 20;
+    if (_statusY + lineHeight > DISPLAY_HEIGHT) return;
+    gfx->setTextSize(2);
+    gfx->setTextColor(color);
+    gfx->setCursor(10, _statusY);
+    gfx->print(msg);
+    _statusY += lineHeight;
+}
+
 // ── Public initialisation ─────────────────────────────────────────────────────
 
 void initDisplay() {

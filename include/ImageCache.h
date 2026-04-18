@@ -30,6 +30,11 @@ public:
     // Selects the oldest file by scanning for the lexicographically smallest filename.
     void cleanup();
 
+    // Print a cache health summary to Serial: frame count, average frame size,
+    // LittleFS used/free, and a suggestion if quality could be raised or lowered.
+    // Call this after showLastXHours() to give feedback on how full the cache is.
+    void printStats();
+
 private:
     // Metadata entry for the in-memory ring buffer.
     struct CacheEntry {
