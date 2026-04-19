@@ -42,12 +42,18 @@ String ImageDownloader::constructUrl(const String& timestamp) {
                     ",h-"   + String(DISPLAY_HEIGHT) +
                     ",q-"   + String(JPEG_QUALITY) + "/";
     switch (SATTYPE) {
-    case GOES_EAST:
+    case GOES_EAST: {
+        String suffix = "_GOES19-ABI-FD-GEOCOLOR-" + String(GOES_SOURCE_SIZE) +
+                        "x" + String(GOES_SOURCE_SIZE) + ".jpg";
         return String(IMAGEKIT_ENDPOINT) + RESIZEURL + resize +
-               BASE_URL_EAST + timestamp + IMAGE_SUFFIX_EAST;
-    case GOES_WEST:
+               BASE_URL_EAST + timestamp + suffix;
+    }
+    case GOES_WEST: {
+        String suffix = "_GOES18-ABI-FD-GEOCOLOR-" + String(GOES_SOURCE_SIZE) +
+                        "x" + String(GOES_SOURCE_SIZE) + ".jpg";
         return String(IMAGEKIT_ENDPOINT) + RESIZEURL + resize +
-               BASE_URL_WEST + timestamp + IMAGE_SUFFIX_WEST;
+               BASE_URL_WEST + timestamp + suffix;
+    }
     case ELEKTROL:
         return String(IMAGEKIT_ENDPOINT) + RESIZEURL_ELEKTROL + resize +
                timestamp + ".jpg";

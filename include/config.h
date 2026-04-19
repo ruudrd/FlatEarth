@@ -26,6 +26,7 @@
 #define DISPLAY_ROTATION 0  // 0 = normal  1 = 90°  2 = 180°  3 = 270°
 
 // ── Pin assignments — upesy_wroom / GC9A01 240×240 (standard SPI) ───────────
+#define GC9A01_INVERT_COLORS true  // Some GC9A01 panels ship with inverted colors; set false if yours looks correct
 #define GC9A01_DC_PIN    17  // Data/Command select
 #define GC9A01_CS_PIN     5  // Chip select
 #define GC9A01_SCK_PIN   18  // SPI clock
@@ -44,7 +45,7 @@
 
 // ── WiFi ─────────────────────────────────────────────────────────────────────
 // Credentials (WIFI_SSID1/2, WIFI_PASSWORD1/2) are defined in secrets.h.
-#define WIFI_CONNECT_ATTEMPTS  20   // Attempts per network before trying the backup
+#define WIFI_CONNECT_ATTEMPTS  2   // Attempts per network before trying the backup
 #define WIFI_CONNECT_DELAY_MS 500   // Delay between each attempt (ms)
 
 // ── Time ─────────────────────────────────────────────────────────────────────
@@ -81,18 +82,21 @@
 #define RESIZEURL_GOES     "GOES/"
 #define RESIZEURL_ELEKTROL "ElektroL/"
 
-// NOAA CDN source paths and filename suffixes for each GOES satellite
-#define BASE_URL_EAST     "GOES19/ABI/FD/GEOCOLOR/"
-#define BASE_URL_WEST     "GOES18/ABI/FD/GEOCOLOR/"
-#define IMAGE_SUFFIX_EAST "_GOES19-ABI-FD-GEOCOLOR-1808x1808.jpg"
-#define IMAGE_SUFFIX_WEST "_GOES18-ABI-FD-GEOCOLOR-1808x1808.jpg"
+// NOAA CDN source paths for each GOES satellite
+#define BASE_URL_EAST "GOES19/ABI/FD/GEOCOLOR/"
+#define BASE_URL_WEST "GOES18/ABI/FD/GEOCOLOR/"
+
+// Resolution of the NOAA source image that ImageKit fetches before resizing.
+// Smaller values reduce the downsampling ratio and may improve sharpness on
+// small displays; larger values give ImageKit more data to work with.
+#define GOES_SOURCE_SIZE 1808  // options: 339 | 678 | 1808 | 5424 | 10848 | 21696
 
 // ── Image cache (LittleFS) ───────────────────────────────────────────────────
 // In-memory ring buffer — tracks recently cached timestamps.
 // Must be at least NROFIMAGESTOSHOW + 1.
 #define CACHE_SIZE 145
 
-// Trigger eviction of the oldest frame when LittleFS reaches this fraction full.
+// Trigger eviction of the oldest frame when LittleFS reaches this fraction full (percentage).
 #define CACHE_FILL_THRESHOLD 0.99f
 
 #endif
