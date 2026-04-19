@@ -39,10 +39,14 @@ bool ImageCache::begin() {
     return true;
 }
 
-// Look up and return /cache/<timestamp>.jpg, creating /cache/ if needed.
+// Return the LittleFS path for a given timestamp under the active satellite's
+// subdirectory, e.g. /cache/GOES_EAST/20261081300.jpg. Creates the directory
+// hierarchy on first use so callers never need to worry about it.
 String ImageCache::getCachePath(const String& timestamp) {
-    if (!LittleFS.exists("/cache")) LittleFS.mkdir("/cache");
-    return "/cache/" + timestamp + ".jpg";
+    if (!LittleFS.exists("/cache"))                        LittleFS.mkdir("/cache");
+    String dir = "/cache/" + String(SATTYPE_NAME);
+    if (!LittleFS.exists(dir))                             LittleFS.mkdir(dir);
+    return dir + "/" + timestamp + ".jpg";
 }
 
 // Write imageBuffer to LittleFS. If the filesystem is nearly full, evict the
@@ -110,10 +114,11 @@ bool ImageCache::loadImage(const String& timestamp) {
     return true;
 }
 
-// Evict exactly enough old frames to make room for one incoming image.
-// Each pass does a full directory scan to find the lexicographically smallest
-// filename (= chronologically oldest frame) and removes it. Continues until
-// free space exceeds imageSize.
+// Evict enough old frames to make room for one incoming image.
+// Scans ALL satellite subdirectories under /cache/ so that switching satellites
+// (or upgrading from the old flat /cache/<timestamp>.jpg layout) never leaves
+// stale files from another source blocking eviction. The oldest file by filename
+// across the whole tree is removed each pass.
 void ImageCache::cleanup() {
     if (DEBUG_ENABLED) {
         Serial.printf("Cache cleanup — used before: %d bytes\n", LittleFS.usedBytes());
@@ -123,20 +128,40 @@ void ImageCache::cleanup() {
     int    removed     = 0;
 
     while (LittleFS.usedBytes() > targetUsage) {
-        // Scan /cache/ for the oldest (lexicographically smallest) filename.
+        // Walk /cache/ and every subdirectory inside it, finding the file with
+        // the lexicographically smallest name (= chronologically oldest frame).
         String oldestPath;
-        File dir = LittleFS.open("/cache");
-        if (!dir || !dir.isDirectory()) break;
+        String oldestName;
 
-        File f = dir.openNextFile();
-        while (f) {
-            if (!f.isDirectory()) {
-                String fp = String(f.path());
-                if (oldestPath.isEmpty() || fp < oldestPath) oldestPath = fp;
+        File root = LittleFS.open("/cache");
+        if (!root || !root.isDirectory()) break;
+
+        File entry = root.openNextFile();
+        while (entry) {
+            if (entry.isDirectory()) {
+                // Satellite subdirectory — scan its files.
+                File f = entry.openNextFile();
+                while (f) {
+                    if (!f.isDirectory()) {
+                        String name = String(f.name());
+                        if (oldestName.isEmpty() || name < oldestName) {
+                            oldestName = name;
+                            oldestPath = String(f.path());
+                        }
+                    }
+                    f = entry.openNextFile();
+                }
+            } else {
+                // Legacy flat file directly in /cache/ (pre-namespacing format).
+                String name = String(entry.name());
+                if (oldestName.isEmpty() || name < oldestName) {
+                    oldestName = name;
+                    oldestPath = String(entry.path());
+                }
             }
-            f = dir.openNextFile();
+            entry = root.openNextFile();
         }
-        dir.close();
+        root.close();
 
         if (oldestPath.isEmpty()) break;
 
@@ -165,7 +190,7 @@ void ImageCache::printStats() {
     int    fileCount = 0;
     size_t dataBytes = 0;  // sum of actual JPEG sizes (not filesystem overhead)
 
-    File dir = LittleFS.open("/cache");
+    File dir = LittleFS.open("/cache/" + String(SATTYPE_NAME));
     if (dir && dir.isDirectory()) {
         File f = dir.openNextFile();
         while (f) {

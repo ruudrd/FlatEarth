@@ -24,13 +24,15 @@ public:
 
     // Return the timestamp string for the most recently available satellite image.
     // Subtracts SERVER_LAG_MINUTES to account for satellite processing delay, then
-    // rounds down to the nearest update cadence (10 min for GOES, 30 min for ElektroL).
+    // rounds down to the nearest update cadence (10 min GOES, 30 min ElektroL, 15 min Meteosat).
     static String getFormattedTime();
 
     // Play back 24 hours of satellite imagery as a frame-by-frame animation.
     // Starting from (now − SERVER_LAG_MINUTES − 24 h), iterates forward through
     // NROFIMAGESTOSHOW evenly-spaced timestamps, downloading and immediately
     // drawing each frame. Cache hits make this fast; misses trigger HTTP downloads.
+    // For Meteosat, cache misses are skipped silently — no download is attempted
+    // since the URL is always "latest" and fetching would corrupt historical slots.
     static void   showLastXHours();
 
 private:
@@ -39,8 +41,10 @@ private:
     static String constructUrl(const String& timestamp);
 
     // Convert a tm struct to the satellite-source-specific timestamp string.
-    // GOES:    YYYYDDDHHMM  (day-of-year, minutes rounded to nearest 10)
+    // GOES:     YYYYDDDHHMM   (day-of-year, minutes rounded to nearest 10)
     // ElektroL: YYYYMMDD-HHMM (minutes rounded to nearest 30)
+    // Meteosat: YYYYMMDD-HHMM (minutes rounded to nearest 15) — cache key only,
+    //           not embedded in the URL (which is always the static latest image)
     static String formatTimestamp(const struct tm& t);
 };
 

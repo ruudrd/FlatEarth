@@ -6,11 +6,12 @@
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-// Format a normalised tm struct as the timestamp string expected by the active
-// satellite source's CDN path.
-// GOES East/West: "YYYYDDDHHMM"  — 4-digit year, 3-digit day-of-year, HHMM
-//                                   with minutes floored to the nearest 10.
-// ElektroL:       "YYYYMMDD-HHMM" — calendar date, minutes floored to nearest 30.
+// Format a normalised tm struct as the timestamp string for the active source.
+// GOES East/West: "YYYYDDDHHMM"   — day-of-year, minutes snapped to nearest 10.
+// ElektroL:       "YYYYMMDD-HHMM" — calendar date, minutes snapped to nearest 30.
+// Meteosat:       "YYYYMMDD-HHMM" — calendar date, minutes snapped to nearest 15.
+//                 Used only as a cache key; the download URL is always the static
+//                 "latest" EUMETSAT image and does not embed the timestamp.
 String ImageDownloader::formatTimestamp(const struct tm& t) {
     char buf[22];
     switch (SATTYPE) {
@@ -21,6 +22,14 @@ String ImageDownloader::formatTimestamp(const struct tm& t) {
                  t.tm_mday,
                  t.tm_hour,
                  (t.tm_min / 30) * 30);  // snap to 0 or 30
+        break;
+    case METEOSAT:
+        snprintf(buf, sizeof(buf), "%04d%02d%02d-%02d%02d",
+                 t.tm_year + 1900,
+                 t.tm_mon  + 1,
+                 t.tm_mday,
+                 t.tm_hour,
+                 (t.tm_min / 15) * 15);  // snap to 0, 15, 30, or 45
         break;
     case GOES_EAST:
     case GOES_WEST:
@@ -57,6 +66,12 @@ String ImageDownloader::constructUrl(const String& timestamp) {
     case ELEKTROL:
         return String(IMAGEKIT_ENDPOINT) + RESIZEURL_ELEKTROL + resize +
                timestamp + ".jpg";
+    case METEOSAT:
+        // The timestamp is not embedded in the URL — EUMETSAT always serves the
+        // latest full-disk image at this static path. The timestamp is used only
+        // as the LittleFS cache key so frames accumulate over 24 hours.
+        return String(IMAGEKIT_ENDPOINT) + RESIZEURL_METEOSAT + resize +
+               METEOSAT_IMAGE_FILE;
     default:
         return "";
     }
@@ -166,6 +181,9 @@ void ImageDownloader::showLastXHours() {
     case ELEKTROL:
         stepMinutes = 30;
         break;
+    case METEOSAT:
+        stepMinutes = 15;
+        break;
     case GOES_EAST:
     case GOES_WEST:
     default:
@@ -179,7 +197,12 @@ void ImageDownloader::showLastXHours() {
         String ts = formatTimestamp(timeinfo);
         if (DEBUG_ENABLED) Serial.printf("Frame %d/%d: %s\n", i + 1, NROFIMAGESTOSHOW, ts.c_str());
 
-        if (downloadImage(ts)) {
+        // Meteosat: only play back what is already cached — downloading on a cache
+        // miss would fetch "latest" into a historical slot, which is wrong.
+        bool loaded = (SATTYPE == METEOSAT)
+            ? cache.loadImage(ts)
+            : downloadImage(ts);
+        if (loaded) {
             TJpgDec.drawJpg(0, 0, imageBuffer, imageSize);
         }
 

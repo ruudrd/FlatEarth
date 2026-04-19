@@ -69,18 +69,27 @@
 #define GOES_EAST 0
 #define GOES_WEST 1
 #define ELEKTROL  2
+#define METEOSAT  3
 
-#define SATTYPE          GOES_EAST        // Active satellite source
-#define NROFIMAGESTOSHOW NROFIMAGES_GOES  // Frames per animation cycle
-#define RESIZEURL        RESIZEURL_GOES   // ImageKit subfolder for the chosen source
+#define SATTYPE          METEOSAT //GOES_EAST        // Active satellite source
+#define NROFIMAGESTOSHOW NROFIMAGES_METEOSAT  // Frames per animation cycle
+#define RESIZEURL        RESIZEURL_METEOSAT   // ImageKit subfolder for the chosen source
 
 // Number of images that cover 24 hours for each source
 #define NROFIMAGES_GOES     144  // GOES updates every 10 min  → 144 frames / 24 h
 #define NROFIMAGES_ELEKTROL  48  // ElektroL updates every 30 min → 48 frames / 24 h
+#define NROFIMAGES_METEOSAT  96  // EUMETSAT updates every 15 min → 96 frames / 24 h
 
 // ImageKit subfolder names (appended to IMAGEKIT_ENDPOINT in the request URL)
+// Meteosat origin must be configured in the ImageKit dashboard pointing to:
+//   https://eumetview.eumetsat.int/static-images/latestImages/
 #define RESIZEURL_GOES     "GOES/"
 #define RESIZEURL_ELEKTROL "ElektroL/"
+#define RESIZEURL_METEOSAT "Meteosat/"
+
+// EUMETSAT Meteosat Enhanced Natural Colour full-disk image (always "latest").
+// The timestamp is used only as a cache key; the URL is always this static file.
+#define METEOSAT_IMAGE_FILE "EUMETSAT_MSG_RGBNatColourEnhncd_LowResolution.jpg"
 
 // NOAA CDN source paths for each GOES satellite
 #define BASE_URL_EAST "GOES19/ABI/FD/GEOCOLOR/"
@@ -90,6 +99,14 @@
 // Smaller values reduce the downsampling ratio and may improve sharpness on
 // small displays; larger values give ImageKit more data to work with.
 #define GOES_SOURCE_SIZE 1808  // options: 339 | 678 | 1808 | 5424 | 10848 | 21696
+
+// Cache subdirectory name for the active satellite — prevents frames from
+// different satellites mixing when SATTYPE is changed.
+#define SATTYPE_NAME \
+    (SATTYPE == GOES_EAST ? "GOES_EAST" : \
+     SATTYPE == GOES_WEST ? "GOES_WEST" : \
+     SATTYPE == ELEKTROL  ? "ElektroL"  : \
+     SATTYPE == METEOSAT  ? "Meteosat"  : "Unknown")
 
 // ── Image cache (LittleFS) ───────────────────────────────────────────────────
 // In-memory ring buffer — tracks recently cached timestamps.
