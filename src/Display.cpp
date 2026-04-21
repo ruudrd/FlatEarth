@@ -34,18 +34,27 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) 
 
 // ── Boot status overlay ───────────────────────────────────────────────────────
 
-// Tracks the next available line so repeated showStatus() calls stack downward.
-static int16_t _statusY = 10;
+// Start a quarter of the way down so text lands in the wider middle of the
+// round screen, clear of the curved edges where corners get clipped.
+static int16_t _statusY = DISPLAY_HEIGHT / 4;
 
-// Draw one line of status text on the display and advance the cursor.
-// Uses textSize(2): each character is 12×16 px, so lines are 20 px apart.
-// Stops drawing silently if the text would fall off the bottom of the screen.
+// Draw one centered status line and advance the cursor downward.
+// textSize(2): each character is 12 px wide × 16 px tall; lines are 20 px apart.
+// Centering is calculated from string length so text stays within the safe
+// circular area on both the 240×240 and 412×412 round displays.
+// Stops drawing silently once the next line would leave the screen.
 void showStatus(const char *msg, uint16_t color) {
+    const int16_t charWidth  = 12;  // pixels per character at textSize(2)
     const int16_t lineHeight = 20;
     if (_statusY + lineHeight > DISPLAY_HEIGHT) return;
+
+    int16_t textWidth = strlen(msg) * charWidth;
+    int16_t x = (DISPLAY_WIDTH - textWidth) / 2;
+    if (x < 0) x = 0;  // clamp if the string is wider than the screen
+
     gfx->setTextSize(2);
     gfx->setTextColor(color);
-    gfx->setCursor(10, _statusY);
+    gfx->setCursor(x, _statusY);
     gfx->print(msg);
     _statusY += lineHeight;
 }
@@ -67,6 +76,9 @@ void initDisplay() {
     }
 
     gfx->setRotation(DISPLAY_ROTATION);
+#ifndef BOARD_WAVESHARE
+    gfx->invertDisplay(GC9A01_INVERT_COLORS);
+#endif
     gfx->fillScreen(0x0000);  // Black screen while waiting for the first image
 
 #ifdef BOARD_WAVESHARE

@@ -51,6 +51,11 @@ private:
     // Returns the full LittleFS path for a given timestamp, e.g. /cache/20261081300.jpg.
     // Creates the /cache/ directory if it does not yet exist.
     String getCachePath(const String& timestamp);
+
+    // Delete all cached frames that belong to a satellite other than the active
+    // SATTYPE. Called once at boot so that switching SATTYPE doesn't leave the
+    // filesystem full of frames from the previous source, blocking new downloads.
+    void purgeStaleSatelliteCache();
 };
 
 // Global cache instance, defined in ImageCache.cpp.

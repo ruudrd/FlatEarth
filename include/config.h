@@ -45,8 +45,8 @@
 
 // ── WiFi ─────────────────────────────────────────────────────────────────────
 // Credentials (WIFI_SSID1/2, WIFI_PASSWORD1/2) are defined in secrets.h.
-#define WIFI_CONNECT_ATTEMPTS  2   // Attempts per network before trying the backup
-#define WIFI_CONNECT_DELAY_MS 500   // Delay between each attempt (ms)
+#define WIFI_CONNECT_ATTEMPTS  20  // Attempts per network before trying the backup (~10 s)
+#define WIFI_CONNECT_DELAY_MS 500  // Delay between each attempt (ms)
 
 // ── Time ─────────────────────────────────────────────────────────────────────
 #define NTP_SERVER         "pool.ntp.org"
@@ -59,37 +59,58 @@
 // ── Image download ───────────────────────────────────────────────────────────
 #define JPEG_QUALITY         70  // ImageKit resize quality (1–100).
                                  // Lower = smaller files, faster animation.
-#define DOWNLOAD_TIMEOUT_MS 5000 // Abort HTTP stream if no data arrives for this long (ms)
-#define UPDATE_INTERVAL_MS 10000 // Pause between main loop iterations (ms)
+#define DOWNLOAD_TIMEOUT_MS  5000 // Abort HTTP stream if no data arrives for this long (ms)
+#define UPDATE_INTERVAL_MS  10000 // Pause between main loop iterations (ms)
+#define FRAME_DELAY_MS        200 // Delay between animation frames in showLastXHours() (ms)
 
 // ── Satellite source ─────────────────────────────────────────────────────────
-// Set SATTYPE to choose which satellite feed to display.
-// Also update NROFIMAGESTOSHOW and RESIZEURL to match.
+// Set SATTYPE to the desired satellite — everything else is derived automatically.
 
-#define GOES_EAST 0
-#define GOES_WEST 1
-#define ELEKTROL  2
-#define METEOSAT  3
+#define GOES_EAST      0
+#define GOES_WEST      1
+#define ELEKTROL       2
+#define METEOSAT       3  // Meteosat-10 at 0° — Europe / Africa / Atlantic
+#define METEOSAT_IODC  4  // Meteosat-9 at 41.5°E — Indian Ocean Data Coverage
 
-#define SATTYPE          METEOSAT //GOES_EAST        // Active satellite source
-#define NROFIMAGESTOSHOW NROFIMAGES_METEOSAT  // Frames per animation cycle
-#define RESIZEURL        RESIZEURL_METEOSAT   // ImageKit subfolder for the chosen source
+#define SATTYPE  METEOSAT  // ← only this line needs changing
+
+#define NROFIMAGESTOSHOW \
+    (SATTYPE == GOES_EAST || SATTYPE == GOES_WEST ? NROFIMAGES_GOES         : \
+     SATTYPE == ELEKTROL                          ? NROFIMAGES_ELEKTROL     : \
+     SATTYPE == METEOSAT                          ? NROFIMAGES_METEOSAT     : \
+                                                    NROFIMAGES_METEOSAT_IODC)
+
+#define RESIZEURL \
+    (SATTYPE == GOES_EAST || SATTYPE == GOES_WEST ? RESIZEURL_GOES         : \
+     SATTYPE == ELEKTROL                          ? RESIZEURL_ELEKTROL     : \
+     SATTYPE == METEOSAT                          ? RESIZEURL_METEOSAT     : \
+                                                    RESIZEURL_METEOSAT_IODC)
 
 // Number of images that cover 24 hours for each source
-#define NROFIMAGES_GOES     144  // GOES updates every 10 min  → 144 frames / 24 h
-#define NROFIMAGES_ELEKTROL  48  // ElektroL updates every 30 min → 48 frames / 24 h
-#define NROFIMAGES_METEOSAT  96  // EUMETSAT updates every 15 min → 96 frames / 24 h
+#define NROFIMAGES_GOES          144  // GOES updates every 10 min  → 144 frames / 24 h
+#define NROFIMAGES_ELEKTROL       48  // ElektroL updates every 30 min → 48 frames / 24 h
+#define NROFIMAGES_METEOSAT       24  // EUMETSAT low-res updates every 60 min → 24 frames / 24 h
+#define NROFIMAGES_METEOSAT_IODC  24  // Same 60-min cadence as primary Meteosat
 
-// ImageKit subfolder names (appended to IMAGEKIT_ENDPOINT in the request URL)
-// Meteosat origin must be configured in the ImageKit dashboard pointing to:
-//   https://eumetview.eumetsat.int/static-images/latestImages/
-#define RESIZEURL_GOES     "GOES/"
-#define RESIZEURL_ELEKTROL "ElektroL/"
-#define RESIZEURL_METEOSAT "Meteosat/"
+// ImageKit subfolder names (appended to IMAGEKIT_ENDPOINT in the request URL).
+// Each satellite needs its own ImageKit origin configured in the dashboard,
+// pointing to https://eumetview.eumetsat.int/static-images/latestImages/
+#define RESIZEURL_GOES          "GOES/"
+#define RESIZEURL_ELEKTROL      "ElektroL/"
+#define RESIZEURL_METEOSAT      "Meteosat/"
+#define RESIZEURL_METEOSAT_IODC "MeteosatIODC/"
 
-// EUMETSAT Meteosat Enhanced Natural Colour full-disk image (always "latest").
-// The timestamp is used only as a cache key; the URL is always this static file.
-#define METEOSAT_IMAGE_FILE "EUMETSAT_MSG_RGBNatColourEnhncd_LowResolution.jpg"
+// EUMETSAT static filenames — each is overwritten in-place every 60 minutes.
+// The timestamp is used only as a LittleFS cache key; it is not part of the URL.
+// See ImageDownloader::constructUrl() for the ik-cache-bust strategy.
+#define METEOSAT_IMAGE_FILE      "EUMETSAT_MSG_RGBNatColourEnhncd_LowResolution.jpg"
+#define METEOSAT_IODC_IMAGE_FILE "EUMETSAT_MSGIODC_RGBNatColourEnhncd_LowResolution.jpg"
+
+// Meteosat images contain unwanted borders and labels around the Earth disk.
+// ImageKit's cm-extract crops to this intermediate square (pixels) before
+// resizing down to DISPLAY_WIDTH × DISPLAY_HEIGHT.
+// Tune this value to tighten or loosen the crop.
+#define METEOSAT_CROP_SIZE 780
 
 // NOAA CDN source paths for each GOES satellite
 #define BASE_URL_EAST "GOES19/ABI/FD/GEOCOLOR/"
@@ -103,10 +124,11 @@
 // Cache subdirectory name for the active satellite — prevents frames from
 // different satellites mixing when SATTYPE is changed.
 #define SATTYPE_NAME \
-    (SATTYPE == GOES_EAST ? "GOES_EAST" : \
-     SATTYPE == GOES_WEST ? "GOES_WEST" : \
-     SATTYPE == ELEKTROL  ? "ElektroL"  : \
-     SATTYPE == METEOSAT  ? "Meteosat"  : "Unknown")
+    (SATTYPE == GOES_EAST     ? "GOES_EAST"    : \
+     SATTYPE == GOES_WEST     ? "GOES_WEST"    : \
+     SATTYPE == ELEKTROL      ? "ElektroL"     : \
+     SATTYPE == METEOSAT      ? "Meteosat"     : \
+     SATTYPE == METEOSAT_IODC ? "MeteosatIODC" : "Unknown")
 
 // ── Image cache (LittleFS) ───────────────────────────────────────────────────
 // In-memory ring buffer — tracks recently cached timestamps.

@@ -33,10 +33,76 @@ bool ImageCache::begin() {
                       LittleFS.totalBytes() - LittleFS.usedBytes());
     }
 
+    purgeStaleSatelliteCache();
+
     for (int i = 0; i < CACHE_SIZE; i++) entries[i].valid = false;
 
     if (DEBUG_ENABLED) Serial.println("Cache system initialized successfully");
     return true;
+}
+
+// Delete all cached frames from satellite directories other than the active one.
+// Re-opens the directory on every iteration to avoid iterator invalidation when
+// files are removed. Runs once at boot — cost is proportional to stale file count.
+void ImageCache::purgeStaleSatelliteCache() {
+    // Remove named satellite subdirectories that don't match the active SATTYPE.
+    const char* allSats[] = {"GOES_EAST", "GOES_WEST", "ElektroL", "Meteosat", "MeteosatIODC"};
+    for (const char* sat : allSats) {
+        if (strcmp(sat, SATTYPE_NAME) == 0) continue;
+        String dirPath = "/cache/" + String(sat);
+        if (!LittleFS.exists(dirPath)) continue;
+
+        int removed = 0;
+        bool found = true;
+        while (found) {
+            found = false;
+            File d = LittleFS.open(dirPath);
+            if (!d || !d.isDirectory()) break;
+            File f = d.openNextFile();
+            while (f) {
+                if (!f.isDirectory()) {
+                    String fp = String(f.path());
+                    f.close();
+                    d.close();
+                    LittleFS.remove(fp);
+                    removed++;
+                    found = true;
+                    break;
+                }
+                f = d.openNextFile();
+            }
+            if (d) d.close();
+        }
+        LittleFS.rmdir(dirPath);
+        if (DEBUG_ENABLED)
+            Serial.printf("Purged stale %s cache: %d files removed\n", sat, removed);
+    }
+
+    // Remove legacy flat files written directly into /cache/ by older firmware
+    // (before satellite-namespaced subdirectories were introduced).
+    int legacy = 0;
+    bool found = true;
+    while (found) {
+        found = false;
+        File root = LittleFS.open("/cache");
+        if (!root || !root.isDirectory()) break;
+        File f = root.openNextFile();
+        while (f) {
+            if (!f.isDirectory()) {
+                String fp = String(f.path());
+                f.close();
+                root.close();
+                LittleFS.remove(fp);
+                legacy++;
+                found = true;
+                break;
+            }
+            f = root.openNextFile();
+        }
+        if (root) root.close();
+    }
+    if (DEBUG_ENABLED && legacy > 0)
+        Serial.printf("Purged %d legacy flat cache files\n", legacy);
 }
 
 // Return the LittleFS path for a given timestamp under the active satellite's

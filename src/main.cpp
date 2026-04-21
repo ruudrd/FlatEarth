@@ -67,12 +67,7 @@ void setup() {
     TJpgDec.setSwapBytes(false);
     TJpgDec.setCallback(tft_output);
 
-    showStatus("Connecting WiFi...");
     setupWiFi();
-    if (WiFi.status() == WL_CONNECTED)
-        showStatus("WiFi OK", 0x07E0);         // green
-    else
-        showStatus("WiFi FAILED", 0xF800);      // red
 
     // Synchronise the RTC via NTP. Block until the time is valid so that image
     // URL timestamps are correct from the very first download.

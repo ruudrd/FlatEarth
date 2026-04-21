@@ -37,7 +37,7 @@ NOAA CDN ──► ImageKit.io (resize) ──► ESP32 (download + cache) ─�
 | Board | Display | Driver | Resolution |
 |---|---|---|---|
 | [Waveshare ESP32-S3-Touch-LCD-1.46B](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.46B) | SPD2010 (QSPI) | Arduino_GFX | 412×412 |
-| Generic ESP32 DevKit | GC9A01 (SPI) | Arduino_GFX | 240×240 |
+| Generic ESP32 DevKit | [GC9A01 1.28" round LCD (AliExpress)](https://nl.aliexpress.com/item/1005008848200231.html) (SPI) | Arduino_GFX | 240×240 |
 
 Both boards use the same source code; the active board is selected at compile time via the PlatformIO environment (`-e upesy_wroom` or `-e waveshare_esp32_s3_touch_lcd_1_46`).
 
